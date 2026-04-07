@@ -35,6 +35,43 @@
             padding: 14px 20px; font-size: 12px; line-height: 1.8; color: #aaa;
         }
         #info-panel strong { color: #7ec8e3; }
+
+        /* CSS2D 오버레이 라벨 스타일 */
+        .site-label { pointer-events: none; text-align: center; }
+        .site-label-card {
+            background: rgba(0, 30, 60, 0.85);
+            border: 1px solid rgba(59, 130, 246, 0.5);
+            border-radius: 8px;
+            padding: 6px 12px;
+            backdrop-filter: blur(6px);
+            white-space: nowrap;
+        }
+        .site-label-name { font-size: 10px; color: #93c5fd; font-weight: 700; margin-bottom: 2px; }
+        .site-label-workers {
+            font-size: 16px; font-weight: 900; color: #fff;
+            display: flex; align-items: center; justify-content: center; gap: 4px;
+        }
+        .site-label-workers svg { width: 14px; height: 14px; fill: #60a5fa; }
+
+        /* 작업자 아이콘 */
+        .worker-icon { pointer-events: none; text-align: center; }
+        .worker-icon svg { width: 44px; height: 44px; filter: drop-shadow(0 0 4px rgba(59, 130, 246, 0.6)); }
+
+        /* 공정률 바 */
+        .progress-label { pointer-events: none; text-align: center; }
+        .progress-bar-container {
+            background: rgba(0, 10, 30, 0.9);
+            border: 1px solid #00AEEF;
+            border-radius: 6px;
+            padding: 5px 10px;
+            white-space: nowrap;
+            min-width: 120px;
+        }
+        .progress-bar-title { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+        .progress-bar-title span:first-child { font-size: 10px; color: #cbd5e1; font-weight: 600; }
+        .progress-bar-title span:last-child { font-size: 12px; color: #00FFFF; font-weight: 900; }
+        .progress-bar-track { width: 100%; height: 4px; background: rgba(255,255,255,0.1); border-radius: 2px; overflow: hidden; }
+        .progress-bar-fill { height: 100%; background: #00FFFF; border-radius: 2px; box-shadow: 0 0 6px #00FFFF; }
     </style>
 </head>
 <body>
@@ -62,9 +99,27 @@
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+        import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 
-        let scene, camera, renderer, controls, currentModel, clock;
+        let scene, camera, renderer, css2dRenderer, controls, currentModel, clock;
         let initialCameraPos, initialTarget;
+        let css2dObjects = [];  // 거리 기반 스케일링용
+        let pulseRings = [];    // 3D 펄스 링 애니메이션용
+        let baseCameraDist = 1; // 초기 카메라 거리
+
+        const SECTIONS = [
+            { name: '토공(시점)', workers: 18, progress: 85, color: '#3b82f6', status: 'mid' },
+            { name: '접속교(시점)', workers: 24, progress: 62, color: '#3b82f6', status: 'mid' },
+            { name: '주탑구간', workers: 54, progress: 45, color: '#ef4444', status: 'high' },
+            { name: '접속교(종점)', workers: 32, progress: 58, color: '#3b82f6', status: 'mid' },
+            { name: '토공(종점)', workers: 14, progress: 90, color: '#10b981', status: 'low' }
+        ];
+
+        const statusConfig = {
+            high: { label: '혼잡', color: '#ef4444' },
+            mid:  { label: '주의', color: '#3b82f6' },
+            low:  { label: '안전', color: '#10b981' }
+        };
 
         function init() {
             const container = document.getElementById('viewer');
@@ -82,6 +137,14 @@
             renderer.toneMappingExposure = 1.2;
             container.appendChild(renderer.domElement);
 
+            css2dRenderer = new CSS2DRenderer();
+            css2dRenderer.setSize(container.clientWidth, container.clientHeight);
+            css2dRenderer.domElement.style.position = 'absolute';
+            css2dRenderer.domElement.style.top = '0';
+            css2dRenderer.domElement.style.left = '0';
+            css2dRenderer.domElement.style.pointerEvents = 'none';
+            container.appendChild(css2dRenderer.domElement);
+
             controls = new OrbitControls(camera, renderer.domElement);
             controls.enableDamping = true;
             controls.dampingFactor = 0.08;
@@ -97,10 +160,7 @@
             clock = new THREE.Clock();
             window.addEventListener('resize', onResize);
             window.addEventListener('keydown', (e) => {
-                if (e.code === 'Space') {
-                    e.preventDefault();
-                    resetCamera();
-                }
+                if (e.code === 'Space') { e.preventDefault(); resetCamera(); }
             });
             animate();
             loadModel();
@@ -110,9 +170,7 @@
             document.getElementById('loading-text').textContent = text || '로딩 중...';
             document.getElementById('loading').classList.remove('hidden');
         }
-        function hideLoading() {
-            document.getElementById('loading').classList.add('hidden');
-        }
+        function hideLoading() { document.getElementById('loading').classList.add('hidden'); }
 
         function fitCameraToModel(object) {
             const box = new THREE.Box3().setFromObject(object);
@@ -132,10 +190,9 @@
             controls.target.copy(center);
             controls.update();
 
-            // 초기 상태 저장
             initialCameraPos = camera.position.clone();
             initialTarget = center.clone();
-
+            baseCameraDist = camera.position.distanceTo(controls.target);
         }
 
         function resetCamera() {
@@ -145,14 +202,121 @@
             controls.update();
         }
 
+        function createWorkerSvg() {
+            return `<svg width="20" height="20" viewBox="0 0 24 24" fill="#60a5fa" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="12" cy="7" r="4"/>
+                <path d="M12 13c-4.42 0-8 1.79-8 4v2h16v-2c0-2.21-3.58-4-8-4z"/>
+            </svg>`;
+        }
+
+        // 3D 펄스 링 생성 (바닥에 납작하게)
+        function createPulseRing(x, y, z, color) {
+            const rings = [];
+            for (let i = 0; i < 3; i++) {
+                const geom = new THREE.RingGeometry(0.5, 1.5, 32);
+                const mat = new THREE.MeshBasicMaterial({
+                    color: new THREE.Color(color),
+                    transparent: true,
+                    opacity: 1.0,
+                    side: THREE.DoubleSide,
+                    depthWrite: false
+                });
+                const mesh = new THREE.Mesh(geom, mat);
+                mesh.rotation.x = -Math.PI / 2;  // 바닥에 납작하게
+                mesh.position.set(x, y, z);
+                scene.add(mesh);
+                rings.push({ mesh, mat, delay: i * 0.8, time: i * 0.8 });
+            }
+            return rings;
+        }
+
+        function addOverlays(model) {
+            const box = new THREE.Box3().setFromObject(model);
+            const min = box.min;
+
+            const DECK_Y = 12;
+
+            const deckPositions = [
+                { x:  75, y: DECK_Y, z: -115 },
+                { x:  38, y: DECK_Y, z:  -62 },
+                { x:   1, y: DECK_Y, z:  -14 },
+                { x: -36, y: DECK_Y, z:   34 },
+                { x: -72, y: DECK_Y, z:   82 },
+            ];
+
+            SECTIONS.forEach((section, i) => {
+                const dp = deckPositions[i];
+                const px = dp.x;
+                const pz = dp.z;
+                const deckY = dp.y;
+                const st = statusConfig[section.status];
+
+                // ── 3D 펄스 링 (바닥에 납작하게 고정) ──
+                const rings = createPulseRing(px, deckY + 0.5, pz, st.color);
+                pulseRings.push(...rings);
+
+                // CSS2DObject 생성 헬퍼: outer(CSS2DRenderer용) > inner(스케일링용)
+                function makeCSS2D(innerHTML, x, y, z) {
+                    const outer = document.createElement('div');
+                    const inner = document.createElement('div');
+                    inner.innerHTML = innerHTML;
+                    outer.appendChild(inner);
+                    const obj = new CSS2DObject(outer);
+                    obj.position.set(x, y, z);
+                    scene.add(obj);
+                    css2dObjects.push(inner);
+                    return obj;
+                }
+
+                // ── 작업자 아이콘들 ──
+                const workerCount = Math.min(Math.ceil(section.workers / 10), 4);
+                for (let w = 0; w < workerCount; w++) {
+                    const offset = (w - (workerCount - 1) / 2) * 3;
+                    makeCSS2D(
+                        `<div class="worker-icon">${createWorkerSvg()}</div>`,
+                        px + offset, deckY + 5, pz + offset * 0.5
+                    );
+                }
+
+                // ── 작업자 수 라벨 ──
+                makeCSS2D(`
+                    <div class="site-label">
+                        <div class="site-label-card">
+                            <div class="site-label-name">${section.name}</div>
+                            <div class="site-label-workers">
+                                ${createWorkerSvg()} <span>${section.workers}명</span>
+                            </div>
+                        </div>
+                    </div>`,
+                    px, deckY + 21, pz
+                );
+
+                // ── 공정률 바 ──
+                makeCSS2D(`
+                    <div class="progress-label">
+                        <div class="progress-bar-container">
+                            <div class="progress-bar-title">
+                                <span>${section.name}</span>
+                                <span>${section.progress}%</span>
+                            </div>
+                            <div class="progress-bar-track">
+                                <div class="progress-bar-fill" style="width: ${section.progress}%"></div>
+                            </div>
+                        </div>
+                    </div>`,
+                    px, deckY - 25, pz
+                );
+            });
+        }
+
         async function loadModel() {
             showLoading('교량 모델 로딩 중...');
-
             try {
                 const object = await loadGLB('bridge.glb');
                 scene.add(object);
                 currentModel = object;
                 fitCameraToModel(object);
+                addOverlays(object);
 
                 const box = new THREE.Box3().setFromObject(object);
                 const size = box.getSize(new THREE.Vector3());
@@ -182,9 +346,7 @@
             const loader = new GLTFLoader();
             loader.setDRACOLoader(dracoLoader);
             return new Promise((resolve, reject) => {
-                loader.load(url, (gltf) => {
-                    resolve(gltf.scene);
-                }, undefined, reject);
+                loader.load(url, (gltf) => { resolve(gltf.scene); }, undefined, reject);
             });
         }
 
@@ -193,13 +355,37 @@
             camera.aspect = container.clientWidth / container.clientHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(container.clientWidth, container.clientHeight);
+            css2dRenderer.setSize(container.clientWidth, container.clientHeight);
         }
 
         function animate() {
             requestAnimationFrame(animate);
             const delta = clock.getDelta();
+            const elapsed = clock.elapsedTime;
             controls.update();
+
+            // CSS2D 거리 기반 스케일링 — inner div에 적용 (CSS2DRenderer의 translate 안 건드림)
+            if (baseCameraDist > 0) {
+                const currentDist = camera.position.distanceTo(controls.target);
+                const scale = baseCameraDist / currentDist;
+                css2dObjects.forEach(inner => {
+                    inner.style.transform = `scale(${scale})`;
+                    inner.style.transformOrigin = 'center center';
+                });
+            }
+
+            // 3D 펄스 링 애니메이션
+            const cycleDuration = 2.5;
+            pulseRings.forEach(ring => {
+                ring.time += delta;
+                const t = ((ring.time) % cycleDuration) / cycleDuration;
+                const s = 1 + t * 12;
+                ring.mesh.scale.set(s, s, s);
+                ring.mat.opacity = (1 - t) * 1.0;
+            });
+
             renderer.render(scene, camera);
+            css2dRenderer.render(scene, camera);
         }
 
         init();
