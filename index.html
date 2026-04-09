@@ -15,6 +15,13 @@
             padding: 0 24px; display: flex; align-items: center; gap: 12px;
         }
         #toolbar h1 { font-size: 18px; font-weight: 700; color: #7ec8e3; margin-right: 20px; white-space: nowrap; }
+        #toolbar button {
+            appearance: none; cursor: pointer;
+            background: rgba(59, 130, 246, 0.2); color: #7ec8e3;
+            border: 1px solid rgba(126, 200, 227, 0.4); border-radius: 6px;
+            padding: 6px 12px; font-size: 12px; font-weight: 600;
+        }
+        #toolbar button:hover { background: rgba(59, 130, 246, 0.35); }
 
         #viewer { position: fixed; top: 52px; left: 0; right: 0; bottom: 0; }
 
@@ -77,6 +84,8 @@
 <body>
     <div id="toolbar">
         <h1>주경간교 모델</h1>
+        <button id="dump-view-btn" title="현재 카메라 좌표를 콘솔에 출력">📍 현재 뷰 좌표</button>
+        <button id="view-1-btn" title="프리셋 뷰 1로 이동">🎥 뷰 1</button>
     </div>
     <div id="viewer"></div>
     <div id="loading" class="hidden"><div class="spinner"></div><p id="loading-text">로딩 중...</p></div>
@@ -164,6 +173,43 @@
             });
             animate();
             loadModel();
+
+            // 카메라 트윈 이동
+            window.tweenCameraTo = function(targetPos, targetLook, duration = 800) {
+                const startPos = camera.position.clone();
+                const startLook = controls.target.clone();
+                const endPos = new THREE.Vector3(...targetPos);
+                const endLook = new THREE.Vector3(...targetLook);
+                const t0 = performance.now();
+                function step() {
+                    const t = Math.min((performance.now() - t0) / duration, 1);
+                    const e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // easeInOutQuad
+                    camera.position.lerpVectors(startPos, endPos, e);
+                    controls.target.lerpVectors(startLook, endLook, e);
+                    controls.update();
+                    if (t < 1) requestAnimationFrame(step);
+                }
+                step();
+            };
+
+            // 프리셋 뷰 1
+            document.getElementById('view-1-btn').addEventListener('click', () => {
+                window.tweenCameraTo(
+                    [98.539, 6.748, -156.377],
+                    [-0.071, 26.654, -23.557]
+                );
+            });
+
+            // 디버그: 현재 뷰 좌표 콘솔 출력 버튼
+            document.getElementById('dump-view-btn').addEventListener('click', () => {
+                const dist = camera.position.distanceTo(controls.target);
+                const v = {
+                    pos: camera.position.toArray().map(n => +n.toFixed(3)),
+                    target: controls.target.toArray().map(n => +n.toFixed(3)),
+                    distance: +dist.toFixed(3)
+                };
+                console.log('[VIEW]', JSON.stringify(v));
+            });
         }
 
         function showLoading(text) {
@@ -233,6 +279,9 @@
         function addOverlays(model) {
             const box = new THREE.Box3().setFromObject(model);
             const min = box.min;
+            const sz = box.getSize(new THREE.Vector3());
+            const REF_DIM = 230; // 원본 bridge.glb 기준 크기
+            window._labelSizeScale = Math.min(1, REF_DIM / Math.max(sz.x, sz.z));
 
             const DECK_Y = 12;
 
@@ -312,8 +361,19 @@
         async function loadModel() {
             showLoading('교량 모델 로딩 중...');
             try {
-                const object = await loadGLB('bridge.glb');
-                scene.add(object);
+                const parts = ['bridge_left.glb', 'bridge.glb', 'bridge_right_1.glb', 'bridge_right_2.glb'];
+                const loaded = [];
+                for (const url of parts) {
+                    try {
+                        loaded.push(await loadGLB(url));
+                    } catch (e) {
+                        console.warn('파트 로드 실패:', url, e);
+                    }
+                }
+                const group = new THREE.Group();
+                loaded.forEach(o => group.add(o));
+                scene.add(group);
+                const object = group;
                 currentModel = object;
                 fitCameraToModel(object);
                 addOverlays(object);
@@ -367,7 +427,7 @@
             // CSS2D 거리 기반 스케일링 — inner div에 적용 (CSS2DRenderer의 translate 안 건드림)
             if (baseCameraDist > 0) {
                 const currentDist = camera.position.distanceTo(controls.target);
-                const scale = baseCameraDist / currentDist;
+                const scale = (baseCameraDist / currentDist) * (window._labelSizeScale || 1);
                 css2dObjects.forEach(inner => {
                     inner.style.transform = `scale(${scale})`;
                     inner.style.transformOrigin = 'center center';
