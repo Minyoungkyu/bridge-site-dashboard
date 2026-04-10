@@ -121,7 +121,10 @@
             { name: '접속교(시점)', workers: 24, progress: 62, color: '#3b82f6', status: 'mid' },
             { name: '주탑구간', workers: 54, progress: 45, color: '#ef4444', status: 'high' },
             { name: '접속교(종점)', workers: 32, progress: 58, color: '#3b82f6', status: 'mid' },
-            { name: '토공(종점)', workers: 14, progress: 90, color: '#10b981', status: 'low' }
+            { name: '토공(종점)', workers: 14, progress: 90, color: '#10b981', status: 'low' },
+            // ── 좌측/우측 접속교 오버레이 ──
+            { name: '좌측 접속교', workers: 12, progress: 70, color: '#3b82f6', status: 'mid' },
+            { name: '우측 접속교', workers: 10, progress: 75, color: '#10b981', status: 'low' }
         ];
 
         const statusConfig = {
@@ -291,6 +294,9 @@
                 { x:   1, y: DECK_Y, z:  -14 },
                 { x: -36, y: DECK_Y, z:   34 },
                 { x: -72, y: DECK_Y, z:   82 },
+                // ── 좌측/우측 접속교 오버레이 위치 ──
+                { x: 160, y: 8, z: -270 },   // ← 좌측 접속교 오버레이 위치 조정
+                { x: -150, y: 9, z:  200 },   // ← 우측 접속교 오버레이 위치 조정
             ];
 
             SECTIONS.forEach((section, i) => {
@@ -361,17 +367,28 @@
         async function loadModel() {
             showLoading('교량 모델 로딩 중...');
             try {
-                const parts = ['bridge_left.glb', 'bridge.glb', 'bridge_right_1.glb', 'bridge_right_2.glb'];
-                const loaded = [];
-                for (const url of parts) {
-                    try {
-                        loaded.push(await loadGLB(url));
-                    } catch (e) {
-                        console.warn('파트 로드 실패:', url, e);
-                    }
-                }
                 const group = new THREE.Group();
-                loaded.forEach(o => group.add(o));
+
+                // ── 좌측 접속교 ──
+                try {
+                    const left = await loadGLB('bridge_left_cut.glb');
+                    left.position.set(65, 0, -100);   // ← 좌측 모델 위치 조정
+                    group.add(left);
+                } catch (e) { console.warn('좌측 로드 실패:', e); }
+
+                // ── 메인 교량 (위치 고정) ──
+                try {
+                    const main = await loadGLB('bridge.glb');
+                    group.add(main);
+                } catch (e) { console.warn('메인 로드 실패:', e); }
+
+                // ── 우측 접속교 ──
+                try {
+                    const right = await loadGLB('bridge_right_cut.glb');
+                    right.position.set(-130, 0, 200);   // ← 우측 모델 위치 조정
+                    group.add(right);
+                } catch (e) { console.warn('우측 로드 실패:', e); }
+
                 scene.add(group);
                 const object = group;
                 currentModel = object;
